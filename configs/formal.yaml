@@ -1,0 +1,87 @@
+dataset_sources:
+  - id: truthfulqa
+    type: hf
+    benchmark: truthfulqa
+    path: truthfulqa/truthful_qa
+    name: generation
+    split: validation
+    prepared_path: data/benchmarks/truthfulqa.jsonl
+  - id: halueval
+    type: hf
+    benchmark: halueval
+    path: pminervini/HaluEval
+    name: qa
+    split: data
+    max_new_tokens: 8         # 只需输出 Yes/No
+    temperature: 0.0          # 贪心生成
+    top_p: 1.0
+    prepared_path: data/benchmarks/halueval.jsonl
+  - id: bbq
+    type: hf
+    benchmark: bbq
+    path: Elfsong/BBQ
+    splits: [age, disability_status, gender_identity, nationality, physical_appearance, race_ethnicity, race_x_gender, race_x_ses, religion, ses, sexual_orientation]
+    prepared_path: data/benchmarks/bbq.jsonl
+  # 间接提示词注入（BIPIA）：只使用 Table QA / Email QA / Code QA 三个任务。
+  # 数据与其他基准一样存放在 data/benchmarks/，由 prepare_assets.py 从仓库内 BIPIA/benchmark/ 拷贝。
+  - id: bipia-table
+    type: bipia
+    benchmark: bipia
+    task: table
+    context_file: data/benchmarks/bipia_table.jsonl
+    attack_file: data/benchmarks/bipia_text_attack_test.json
+    sample_ratio: 0.3      # 随机抽取 30% 样本（seed 复现）
+    max_new_tokens: 512
+    temperature: 0.0
+    top_p: 1.0
+  - id: bipia-email
+    type: bipia
+    benchmark: bipia
+    task: email
+    context_file: data/benchmarks/bipia_email.jsonl
+    attack_file: data/benchmarks/bipia_text_attack_test.json
+    sample_ratio: 0.3      # 随机抽取 30% 样本（seed 复现）
+    max_new_tokens: 512
+    temperature: 0.0
+    top_p: 1.0
+  - id: bipia-code
+    type: bipia
+    benchmark: bipia
+    task: code
+    context_file: data/benchmarks/bipia_code.jsonl
+    attack_file: data/benchmarks/bipia_code_attack_test.json
+    sample_ratio: 0.3      # 随机抽取 30% 样本（seed 复现）
+    max_new_tokens: 512
+    temperature: 0.0
+    top_p: 1.0
+
+models:
+  - model_id: Qwen/Qwen2.5-3B-Instruct
+    adapter: hf
+    revision: main
+    device: auto
+    local_dir: models/Qwen--Qwen2.5-3B-Instruct
+  - model_id: Qwen/Qwen2.5-7B-Instruct
+    adapter: hf
+    revision: main
+    device: auto
+    local_dir: models/Qwen--Qwen2.5-7B-Instruct
+
+experiment:
+  seed: 42
+  num_seeds: 3        # 未显式给出 seeds 时，从 seed 起连续取 num_seeds 个
+  # 三个常用随机种子，优先于上面的 seed + num_seeds 连续推导
+  seeds: [42, 1234, 2024]
+
+# 间接提示词注入的裁判模型：对齐 BIPIA 官方 ModelEval，唯一区别是底层模型用 DeepSeek。
+# api_key 留空时读 DEEPSEEK_API_KEY 环境变量。裁判只需 YES/NO 判断，用非推理模型
+# deepseek-chat（max_tokens=32 足够）；推理模型（deepseek-v4-flash 等）会因思考耗尽
+# token 预算而返回空 content，导致大量裁判失败。
+judge:
+  api_base: https://api.deepseek.com
+  api_key: ""              # 留空，运行时从 DEEPSEEK_API_KEY 环境变量读取
+  model: deepseek-chat
+  temperature: 0.0
+  max_tokens: 32
+  max_retries: 3          # 指数退避重试次数（总尝试 = max_retries + 1）
+  retry_backoff: 2.0      # 退避基数（秒），第 n 次重试等待 2^n * retry_backoff

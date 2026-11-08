@@ -1,0 +1,12 @@
+PyYAML>=6.0
+matplotlib>=3.8
+torch>=2.2
+transformers>=4.40
+accelerate>=0.28
+datasets>=2.18
+huggingface_hub>=0.24
+tqdm>=4.66
+thefuzz>=0.20
+langdetect>=1.0.9
+emoji>=2.8
+requests>=2.31

@@ -1,0 +1,42 @@
+LLM Trust Eval — Third-Party Notices
+=======================================
+
+This project uses benchmark datasets and reference implementations provided by
+third parties. These components are NOT covered by this project's LICENSE file
+and remain subject to the licenses of their respective owners, as listed below.
+Users are responsible for reviewing and complying with those licenses before
+redistributing the datasets or any derived data.
+
+TruthfulQA
+----------
+  * Source: https://github.com/sylinrl/TruthfulQA
+  * License: Apache License 2.0
+  * License text: http://www.apache.org/licenses/LICENSE-2.0
+
+HaluEval
+--------
+  * Source: https://github.com/RUCAIBox/HaluEval
+  * License: MIT License (Copyright (c) 2020 RUCAIBox)
+
+BBQ
+---
+  * Source: https://github.com/nyu-mll/BBQ
+  * License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+  * License text: https://creativecommons.org/licenses/by/4.0/
+
+BIPIA
+-----
+  * Source: https://github.com/microsoft/BIPIA
+  * License: MIT License (Copyright (c) Microsoft Corporation). See BIPIA/LICENSE.
+  * The BIPIA dataset itself contains additional components under separate
+    licenses:
+      - WikiTableQuestions — CC BY-SA 4.0
+          (https://github.com/ppasupat/WikiTableQuestions/blob/master/LICENSE)
+      - Stack Exchange — CC BY-SA 4.0
+          (https://creativecommons.org/licenses/by-sa/4.0/)
+      - OpenAI Evals invoices — MIT
+          (https://github.com/openai/evals/blob/main/LICENSE.md)
+
+Disclaimer: While efforts have been made to accurately represent the licenses
+associated with each dataset, users should consult the original source of each
+dataset to ensure compliance with any licensing terms and conditions.
