@@ -73,8 +73,6 @@ experiment:
   # 三个常用随机种子，优先于上面的 seed + num_seeds 连续推导
   seeds: [42, 1234, 2024]
 
-# 间接提示词注入的裁判模型：对齐 BIPIA 官方 ModelEval，唯一区别是底层模型用 DeepSeek。
-# api_key 留空时读 DEEPSEEK_API_KEY 环境变量。裁判只需 YES/NO 判断，用非推理模型
 # deepseek-chat（max_tokens=32 足够）；推理模型（deepseek-v4-flash 等）会因思考耗尽
 # token 预算而返回空 content，导致大量裁判失败。
 judge:
