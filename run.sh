@@ -14,14 +14,43 @@ CONDA_INIT_PATHS=(
   "/data/jingjunwei/.conda/etc/profile.d/conda.sh"
 )
 
-# 使用的 GPU 编号；多卡机器上可改成空闲的卡（例如 3），可用 nvidia-smi 查看各卡显存。
-# 默认用两张卡（0,1），配合 device_map="auto" 把裁判 14B 和被测 3B 分到不同卡。
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+# 使用的 GPU 编号。显式设置 CUDA_VISIBLE_DEVICES 时以它为准；否则自动挑选显存最空闲
+# 且至少有 PJ_LLM_MIN_FREE_MIB 空闲显存的单张卡。这里必须选「真正空闲」的卡：
+# device_map="auto" 会把模型的第一层放到 cuda:0，若 cuda:0 被别的任务占满，
+# 即使多给几张卡也照样 OOM（多卡机器上可先用 nvidia-smi 查看占用情况）。
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+  MIN_FREE_MIB="${PJ_LLM_MIN_FREE_MIB:-24000}"
+  BEST_GPU="$(nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits \
+    | awk -F',' -v min="$MIN_FREE_MIB" '{gsub(/ /, "", $1); gsub(/ /, "", $2); if ($2 + 0 >= min) print $2, $1}' \
+    | sort -k1,1nr | head -n1)"
+  if [[ -n "$BEST_GPU" ]]; then
+    CUDA_VISIBLE_DEVICES="$(awk '{print $2}' <<<"$BEST_GPU")"
+    echo "[gpu] auto-selected GPU $CUDA_VISIBLE_DEVICES ($(awk '{print $1}' <<<"$BEST_GPU") MiB free)"
+  else
+    echo "[gpu] no GPU with >= ${MIN_FREE_MIB} MiB free memory; set CUDA_VISIBLE_DEVICES manually" >&2
+    exit 1
+  fi
+fi
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+
+# 预检：显式指定的卡如果已被别的任务占满，这里立刻告警；否则 OOM 会淹没在几十万条
+# 「case failed」里，整轮评测悄悄全记成 0 分。
+if command -v nvidia-smi >/dev/null 2>&1; then
+  for GPU_ID in ${CUDA_VISIBLE_DEVICES//,/ }; do
+    FREE_MIB="$(nvidia-smi -i "$GPU_ID" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | tr -dc '0-9' || true)"
+    if [[ -n "$FREE_MIB" ]] && (( FREE_MIB < ${MIN_FREE_MIB:-24000} )); then
+      echo "[gpu] warning: GPU $GPU_ID has only ${FREE_MIB} MiB free (< ${MIN_FREE_MIB:-24000} MiB); expect CUDA OOM" >&2
+    fi
+  done
+fi
 
 # Hugging Face Hub 端点；直连被阻断的网络可改用镜像。
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 # Xet 传输后端依赖未被镜像代理的 cas-server，默认关闭改用普通 HTTP 下载。
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+
+# 缓解长序列打分时 logits/log_softmax 造成的显存碎片。
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # CUDA 版 PyTorch 的 wheel 源（依次尝试）。
 PYTORCH_CUDA_INDEX_URL="${PYTORCH_CUDA_INDEX_URL:-https://download.pytorch.org/whl/cu124 https://download.pytorch.org/whl/cu121 https://download.pytorch.org/whl/cu118}"
