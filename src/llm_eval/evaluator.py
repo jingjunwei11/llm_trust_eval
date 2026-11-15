@@ -16,6 +16,15 @@ from .bipia import BipiaJudge, JudgeError, score_bipia_asr
 logger = logging.getLogger(__name__)
 
 
+def _is_oom_error(exc: BaseException) -> bool:
+    """OOM 会破坏进程状态（CUDA context 失效），后续 case 只会继续失败，必须中断整轮。"""
+    try:
+        import torch
+    except ImportError:
+        return isinstance(exc, MemoryError)
+    return isinstance(exc, (torch.OutOfMemoryError, MemoryError))
+
+
 @dataclass
 class Result:
     model_id: str
@@ -91,6 +100,9 @@ class Evaluator:
                             score, extras, metadata = self._score_case(case, response)
                         error = ""
                     except Exception as exc:  # keep one failed sample from hiding the rest
+                        if _is_oom_error(exc):
+                            logger.critical("out of memory, aborting run instead of recording zeros: %s", exc)
+                            raise
                         response = ""
                         score, extras, metadata, error = 0.0, {}, {}, f"{type(exc).__name__}: {exc}"
                         logger.exception("case failed model=%s case=%s seed=%s", spec.model_id, case.case_id, seed)
