@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ModelAdapter:
@@ -33,7 +36,17 @@ class HuggingFaceAdapter(ModelAdapter):
         if use_cuda:
             kwargs["torch_dtype"] = torch.float16
             if device in {"auto", "cuda"}:
-                kwargs["device_map"] = "auto"
+                # 固定在一张卡上，不跨卡拆分。device_map="auto" 会按 0→1→2 顺序填卡，
+                # 而绑定权重的模型（如 Qwen2.5-3B）lm_head 必须和 embed_tokens 同在
+                # cuda:0；一旦 cuda:0 显存被别的任务占满，logits/log_softmax 必然 OOM。
+                # 这里选可见设备中显存最空闲的一张，整个模型都放上去。
+                target = max(
+                    range(torch.cuda.device_count()),
+                    key=lambda idx: torch.cuda.mem_get_info(idx)[0],
+                )
+                free_gib = torch.cuda.mem_get_info(target)[0] / 2**30
+                logger.info("loading %s on cuda:%d (%.1f GiB free)", model_path, target, free_gib)
+                kwargs["device_map"] = {"": target}
             else:
                 kwargs["device_map"] = {"": device}
         self.model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
