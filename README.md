@@ -20,32 +20,12 @@ bash run.sh
 输出文件包括：
 
 - `results.jsonl`：每条样本的原始回答、分数和元数据（含 `seed` 字段区分不同随机种子）
-- `metrics.csv`：各模型、各维度的均值和 95% 置信区间（按唯一 case 计算，n 为真实题数；BIPIA 跨 seed 抽样不同，n 为唯一 case 并集）
-- `summary.json`：各维度评分、综合分（跨种子 `mean ± std`）、HaluEval 混淆矩阵
-- `report.html`：汇总表和模型维度评分，附各维度 95% CI 与 n
+- `metrics.csv`：各模型、各维度的均值和95% 置信区间
+- `summary.json`：各维度评分、综合分（跨种子为 `mean ± std`）
+- `report.html`：汇总表和模型维度评分，分数以 `mean ± std` 表示
 - `score_overview.png`：评分柱状图
 
-默认跑三个随机种子（`experiment.seeds: [42, 1234, 2024]`）。`temperature=0` 且 MC 题用 logprob 打分时，TruthfulQA/BBQ/HaluEval 在不同 seed 下逐条完全相同，所以**跨 seed 的 std 天然为 0**；报告的不确定性统一按「唯一 case」计算 95% CI，不会把同一题的 seed 副本当作独立样本（避免 CI 被缩小 `sqrt(seed 数)` 倍）。BIPIA 的 `sample_ratio` 抽样随 seed 变化，不同 seed 得到不同的 case 子集。未给出 `seeds` 时从 `seed` 起连续取 `num_seeds` 个。
-
-### 局部重跑与结果合并
-
-只重跑受评测口径影响的基准，并与既有全量结果合并：
-
-```bash
-# 1) 只重跑 BBQ（配置里的三个 seed）
-python main.py evaluate --config configs/formal.yaml \
-  --output outputs/rerun-bbq --benchmarks bbq --seeds 42,1234,2024
-
-# 2) 合并进原全量结果：保留三个 seed，重跑部分覆盖旧行，并重新生成报告
-python main.py merge --config configs/formal.yaml \
-  --base outputs/formal-<old>/results.jsonl \
-  --rerun outputs/rerun-bbq/results.jsonl \
-  --output outputs/final --keep-seeds 42,1234,2024 --replace-benchmarks BBQ
-```
-
-`merge` 默认保留配置里的 seeds、只替换 BBQ；需要替换其他基准时用 `--replace-benchmarks` 显式指定。TruthfulQA 的 MC1 已核对官方 `truthfulqa_mc1`（`mc1_targets` 只含 best_answer 一个正确项），原实现即为官方口径，不需要重跑。
-
-`evaluate` 还支持 `--models`（逗号分隔的 `model_id`）和 `--limit N`（冒烟测试）。每个 case 完成即写入 `results.partial.jsonl`，长跑中断不会丢失已完成样本。
+默认用三个常用随机种子（`experiment.seeds`，默认 `[42, 1234, 2024]`）重复评测，报告分数用均值 ± 标准差表示；未显式给出 `seeds` 时从 `seed` 起连续取 `num_seeds` 个，`num_seeds: 1` 即退回单种子运行。
 
 `run.sh` 把完整终端输出写入 `logs/run-<YYYYmmdd-HHMMSS>.log`。可通过环境变量覆盖目录：
 
@@ -56,17 +36,15 @@ python main.py merge --config configs/formal.yaml \
 
 ### 幻觉（hallucination）
 
-- **TruthfulQA**（817 条）：按官方 [lm-eval truthfulqa_mc1/mc2](https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks/truthfulqa) 口径，`QA_PRIMER` 前缀 + 各候选答案对数概率。
-  - MC1：`P(best_answer) > max(P(incorrect answers))`，对应只含一个正确项的 `mc1_targets`
-  - MC2：全部正确答案的概率质量占比（`mc2_targets`）
+- **TruthfulQA**（817 条）：按官方 [sylinrl/TruthfulQA](https://github.com/sylinrl/TruthfulQA) MC 口径，`QA_PRIMER` 前缀 + 各候选答案对数概率。
+  - 指标：MC1 准确率、MC2 准确率
 - **HaluEval**（`qa` 全量）：按官方 [RUCAIBox/HaluEval](https://github.com/RUCAIBox/HaluEval)，随机选 right / hallucinated 答案，few-shot 指令 + Yes/No 子串匹配。
   - 指标：检测准确率
 
 ### 偏见歧视（bias）
 
-- **BBQ**（58,492 条）：按官方 [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) 的 12 选项 logprob 协议——从 ans0/ans1/ans2 移除数据集自带的 unknown 答案，再追加 10 个 `UNKNOWN_RESPONSES`；歧义题的 target 为全部 10 个 unknown 变体。
+- **BBQ**（58,492 条）：按官方 [nyu-mll/BBQ](https://github.com/nyu-mll/BBQ) 原版口径，3 选项（ans0/ans1/ans2）取对数概率 argmax。
   - 指标：总/歧义/消歧准确率（偏见歧视基准分用总准确率），偏差分 `S_DIS`、`S_AMB`，每类别偏差分
-  - 「偏见答案」判定沿用 nyu-mll 论文 R 脚本口径，因此 `S_DIS`/`S_AMB` 不与 lm-eval 数值直接比较；12 选项下模型很少选 unknown，歧义准确率应视为协议相关指标，而非行为层面的偏见结论
 
 ### 间接提示词注入（indirect prompt injection）
 
@@ -109,9 +87,9 @@ llm-trust-eval/
 formal.yaml
   -> 下载/读取全部基准数据（HF + data/benchmarks 内 BIPIA 数据）
   -> 统一 Hugging Face 模型接口
-  -> 三个随机种子运行评测（默认 [42, 1234, 2024]）
-  -> 保存原始 JSONL（逐 case 增量落盘）
-  -> 按唯一 case 计算官方指标和 95% CI
+  -> 多个随机种子运行评测（默认 3 次）
+  -> 保存原始 JSONL
+  -> 计算官方指标和 95% CI
   -> 计算综合可信分数
   -> 生成 HTML、CSV、JSON 和 PNG 报告
 ```
@@ -136,6 +114,5 @@ formal.yaml
 |---|---|---|
 | [sylinrl/TruthfulQA](https://github.com/sylinrl/TruthfulQA) | `qa` preset、MC1/MC2 评分口径 | `datasets.py`、`evaluator.py` 的 `_score_mc` |
 | [RUCAIBox/HaluEval](https://github.com/RUCAIBox/HaluEval) | 幻觉检测格式、few-shot 指令、准确率 | `datasets.py`、`evaluator.py` |
-| [nyu-mll/BBQ](https://github.com/nyu-mll/BBQ) | `S_DIS`/`S_AMB`、偏见答案判定 | `datasets.py`、`scoring.py` |
-| [lm-evaluation-harness BBQ](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/bbq/utils.py) | 12 选项（`doc_to_choice`）与 target 展开（`doc_to_targets`） | `datasets.py` |
+| [nyu-mll/BBQ](https://github.com/nyu-mll/BBQ) | `S_DIS`/`S_AMB`、3 选项（ans0/ans1/ans2） | `datasets.py`、`scoring.py` |
 | [microsoft/BIPIA](https://github.com/microsoft/BIPIA) | Table/Email/Code QA 的注入样本构造、官方 ASR（`MatchRefEval`/`EmojiEval`/`LanguageEval`/`ModelEval`，裁判用 DeepSeek） | `bipia.py`、`evaluator.py`、`scoring.py` |

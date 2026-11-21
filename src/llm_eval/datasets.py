@@ -47,41 +47,15 @@ def _process_groups_in_answers(string: str) -> list[str]:
     return string.lower().split("_")
 
 
-def _bbq_choice_plan(row: dict[str, Any]) -> tuple[list[str], dict[int, int], int]:
-    """官方 lm-eval ``doc_to_choice``：从 ans0/1/2 中移除数据集自带的 unknown 答案，
-    再追加 10 个 ``UNKNOWN_RESPONSES``，得到 12 个选项。
-
-    返回 ``(choices, old_to_new, unknown_idx)``：``old_to_new`` 把原始 ans 下标映射到
-    新选项下标（用于 biased_answer_indices），``unknown_idx`` 是原始选项里 unknown 的位置。
-    """
-    original = [str(row["ans0"]), str(row["ans1"]), str(row["ans2"])]
-    unknown_idx = next((i for i, text in enumerate(original) if text in UNKNOWN_RESPONSES), None)
-    if unknown_idx is None:
-        # 兜底：答案文本与官方短语不完全一致时按 answer_info 的 group 判定。
-        unknown_idx = next(
-            (i for i in range(3) if str(row["answer_info"][f"ans{i}"][2]) == "unknown"), 2
-        )
-    kept = [(i, text) for i, text in enumerate(original) if i != unknown_idx]
-    choices = [text for _, text in kept] + list(UNKNOWN_RESPONSES)
-    old_to_new = {old: new for new, (old, _) in enumerate(kept)}
-    return choices, old_to_new, unknown_idx
-
-
 def _bbq_choices(row: dict[str, Any]) -> list[str]:
-    return _bbq_choice_plan(row)[0]
+    # nyu-mll 原版：3 个答案（ans0/ans1/ans2），不做 unknown 展开（R 脚本是 3 选 1）。
+    return [str(row["ans0"]), str(row["ans1"]), str(row["ans2"])]
 
 
 def _bbq_targets(row: dict[str, Any]) -> list[int]:
-    """官方 ``doc_to_targets``：歧义题的 target 展开为追加的 10 个 unknown 选项；
-    消歧题 target 是正确 named answer 在新选项集里的下标。"""
-    _, old_to_new, unknown_idx = _bbq_choice_plan(row)
+    # nyu-mll 原版：label 直接指向 0/1/2 正确答案。
     label = int(row.get("answer_label", row.get("label", -1)))
-    if label == unknown_idx:
-        # 新 choices = [2 个 named answer] + UNKNOWN_RESPONSES，unknown 位于下标 2..11。
-        return list(range(2, 2 + len(UNKNOWN_RESPONSES)))
-    if label in old_to_new:
-        return [old_to_new[label]]
-    return []
+    return [label]
 
 
 def _ans_text_info(row: dict[str, Any]) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
@@ -422,17 +396,6 @@ def _load_jsonl_rows(path: str | Path) -> list[dict[str, Any]]:
     return rows
 
 
-def filter_cases_by_benchmark(cases: list[Case], names: list[str] | None) -> list[Case]:
-    """只保留指定 benchmark（TruthfulQA / HaluEval / BBQ / BIPIA）的样本，用于局部重跑。"""
-    if not names:
-        return cases
-    wanted = {str(name).strip().lower() for name in names if str(name).strip()}
-    selected = [case for case in cases if str(case.metadata.get("benchmark", "")).lower() in wanted]
-    if not selected:
-        raise ValueError(f"No cases matched benchmarks: {sorted(wanted)}")
-    return selected
-
-
 def _convert_row(benchmark: str, row: dict[str, Any], source: dict[str, Any], index: int) -> Case:
     prefix = str(source.get("id", benchmark))
     if benchmark in {"truthfulqa", "truthfulness"}:
@@ -471,21 +434,15 @@ def _convert_row(benchmark: str, row: dict[str, Any], source: dict[str, Any], in
         question = str(row.get("question", ""))
         # 官方 doc_to_text：`{context}\n\nQ: {question}\nA:`；选项按 doc_to_choice 展开为 12 个。
         prompt = f"{context}\n\nQ: {question}\nA:"
-        choices, old_to_new, unknown_idx = _bbq_choice_plan(row)
-        # bias 答案判定继续跟 nyu-mll 的 R 脚本；这里只把原始 ans 下标映射到 12 选项下标。
-        biased_new = [
-            old_to_new[i] for i in _bbq_biased_answer_indices(row) if i in old_to_new
-        ]
         return Case(
             case_id=f"{prefix}-{index}",
             dimension="bias",
             prompt=prompt,
             metadata={
                 "benchmark": "BBQ",
-                "choices": choices,
+                "choices": _bbq_choices(row),
                 "targets": _bbq_targets(row),
-                "biased_answer_indices": biased_new,
-                "bbq_unknown_index": unknown_idx,
+                "biased_answer_indices": _bbq_biased_answer_indices(row),
                 "context_condition": row.get("context_condition", ""),
                 "category": row.get("category", ""),
             },
