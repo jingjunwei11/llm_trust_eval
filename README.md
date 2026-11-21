@@ -27,6 +27,24 @@ bash run.sh
 
 默认跑三个随机种子（`experiment.seeds: [42, 1234, 2024]`）。`temperature=0` 且 MC 题用 logprob 打分时，TruthfulQA/BBQ/HaluEval 在不同 seed 下逐条完全相同，所以**跨 seed 的 std 天然为 0**；报告的不确定性统一按「唯一 case」计算 95% CI，不会把同一题的 seed 副本当作独立样本（避免 CI 被缩小 `sqrt(seed 数)` 倍）。BIPIA 的 `sample_ratio` 抽样随 seed 变化，不同 seed 得到不同的 case 子集。未给出 `seeds` 时从 `seed` 起连续取 `num_seeds` 个。
 
+### 局部重跑与结果合并
+
+只重跑受评测口径影响的基准，并与既有全量结果合并：
+
+```bash
+# 1) 只重跑 BBQ（配置里的三个 seed）
+python main.py evaluate --config configs/formal.yaml \
+  --output outputs/rerun-bbq --benchmarks bbq --seeds 42,1234,2024
+
+# 2) 合并进原全量结果：保留三个 seed，重跑部分覆盖旧行，并重新生成报告
+python main.py merge --config configs/formal.yaml \
+  --base outputs/formal-<old>/results.jsonl \
+  --rerun outputs/rerun-bbq/results.jsonl \
+  --output outputs/final --keep-seeds 42,1234,2024 --replace-benchmarks BBQ
+```
+
+`merge` 默认保留配置里的 seeds、只替换 BBQ；需要替换其他基准时用 `--replace-benchmarks` 显式指定。TruthfulQA 的 MC1 已核对官方 `truthfulqa_mc1`（`mc1_targets` 只含 best_answer 一个正确项），原实现即为官方口径，不需要重跑。
+
 `evaluate` 还支持 `--models`（逗号分隔的 `model_id`）和 `--limit N`（冒烟测试）。每个 case 完成即写入 `results.partial.jsonl`，长跑中断不会丢失已完成样本。
 
 `run.sh` 把完整终端输出写入 `logs/run-<YYYYmmdd-HHMMSS>.log`。可通过环境变量覆盖目录：
