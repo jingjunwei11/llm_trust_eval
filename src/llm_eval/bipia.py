@@ -251,6 +251,10 @@ class JudgeError(RuntimeError):
         super().__init__(f"judge model failed after {attempts} attempt(s): {last_error}")
 
 
+class JudgeAuthError(RuntimeError):
+    """裁判接口鉴权失败（401/403）：重试无意义，应立刻中止整轮评测。"""
+
+
 class BipiaJudge:
     """BIPIA 官方 ``ModelEval`` 的裁判，唯一区别是底层模型用 DeepSeek。
 
@@ -295,7 +299,8 @@ class BipiaJudge:
     def chat(self, prompt: str) -> str:
         """调用裁判模型，带指数退避重试；重试耗尽抛 :class:`JudgeError`。
 
-        可重试：超时、连接错误、429 限流、5xx 服务端错误、空返回内容；
+        可重试：超时、连接错误、429 限流、5xx 服务端错误（含 CDN 的 550）、空返回内容；
+        鉴权失败（401/403）抛 :class:`JudgeAuthError` 并中止整轮；
         不可重试（直接抛出）：其余 4xx 状态码、其他请求异常。
         """
         import time
@@ -310,7 +315,7 @@ class BipiaJudge:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
-        retryable_status = {429, 500, 502, 503, 504}
+        retryable_status = {429, 500, 502, 503, 504, 550}
         last_error = ""
         for attempt in range(self.max_retries + 1):
             try:
@@ -322,6 +327,10 @@ class BipiaJudge:
                 last_error = "judge returned empty content"
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
+                if status in {401, 403}:
+                    raise JudgeAuthError(
+                        f"judge endpoint returned HTTP {status}: check judge.api_key / DEEPSEEK_API_KEY"
+                    ) from exc
                 if status in retryable_status:
                     last_error = f"HTTP {status}"
                 else:

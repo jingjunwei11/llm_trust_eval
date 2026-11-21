@@ -56,6 +56,7 @@ dataset_sources:
     top_p: 1.0
 
 models:
+  # ---- 基线：通义千问 Qwen2.5（3B / 7B） ----
   - model_id: Qwen/Qwen2.5-3B-Instruct
     adapter: hf
     revision: main
@@ -67,10 +68,34 @@ models:
     device: auto
     local_dir: models/Qwen--Qwen2.5-7B-Instruct
 
+  # ---- 对照小模型：不同厂商 / 不同版本 ----
+  # 以下仓库均为公开（gated=False）且不带 trust_remote_code，可直接从 HF 镜像下载，
+  # 无需申请访问权限；架构均被当前 transformers 原生支持（Qwen2 / Phi3 / Mistral / Llama）。
+  # 规模覆盖 1.7B–7B，便于横向比较可信度随模型能力/规模的变化。
+
+  # 通义千问：同系列更小尺寸，用于观察 Qwen 内部的规模趋势
+  - model_id: Qwen/Qwen2.5-1.5B-Instruct
+    adapter: hf
+    revision: main
+    device: auto
+    local_dir: models/Qwen--Qwen2.5-1.5B-Instruct
+
+
+  # Mistral AI：v0.3（较 v0.2 更新的指令版本，32K 上下文）
+  - model_id: mistralai/Mistral-7B-Instruct-v0.3
+    adapter: hf
+    revision: main
+    device: auto
+    local_dir: models/mistralai--Mistral-7B-Instruct-v0.3
+
+
 experiment:
   seed: 42
   num_seeds: 3        # 未显式给出 seeds 时，从 seed 起连续取 num_seeds 个
-  # 三个常用随机种子，优先于上面的 seed + num_seeds 连续推导
+  # 跑三个种子。注意：temperature=0 且 MC 题用 logprob 打分时，多个 seed 对
+  # TruthfulQA/BBQ/HaluEval 是逐条相同的，跨 seed 的 std 天然为 0；
+  # 报告的不确定性按「唯一 case」计算 95% CI（见 reporting.py），不会把
+  # 同一题的 seed 副本当作独立样本。BIPIA 的 sample_ratio 抽样随 seed 变化。
   seeds: [42, 1234, 2024]
 
 # deepseek-chat（max_tokens=32 足够）；推理模型（deepseek-v4-flash 等）会因思考耗尽

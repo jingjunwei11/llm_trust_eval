@@ -29,6 +29,9 @@ class HuggingFaceAdapter(ModelAdapter):
         model_path = model_path if model_path and os.path.isdir(model_path) else model_id
         load_kwargs: dict[str, Any] = {"revision": revision} if revision and model_path == model_id else {}
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, **load_kwargs)
+        # Llama/Mistral 系列没有 pad token，批量打分时用 eos 填充（attention_mask 会屏蔽）。
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         kwargs: dict[str, Any] = dict(load_kwargs)
         use_cuda = torch.cuda.is_available() and (
             device in {"auto", "cuda"} or (isinstance(device, str) and device.startswith("cuda:"))
@@ -79,19 +82,45 @@ class HuggingFaceAdapter(ModelAdapter):
         generated = output[0][inputs.shape[-1] :]
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
+    def score_continuations(self, prompt: str, continuations: list[str], batch_size: int = 32) -> list[float]:
+        """批量返回每个 continuation 在 prompt 条件下的对数概率之和。
+
+        一次 forward 计算多个候选，BBQ 的 12 个选项 / TruthfulQA 的全部候选可以并排
+        打分，避免逐条 forward 把重跑时间放大一个数量级。序列按右侧 padding，用
+        attention_mask 只累加真实 continuation token 的 logprob。
+        """
+        if not continuations:
+            return []
+        prompt_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
+        p_len = prompt_ids.shape[-1]
+        self.tokenizer.padding_side = "right"
+        scores: list[float] = []
+        for start in range(0, len(continuations), batch_size):
+            chunk = continuations[start : start + batch_size]
+            batch = self.tokenizer(
+                [prompt + continuation for continuation in chunk],
+                return_tensors="pt",
+                padding=True,
+            )
+            full_ids = batch.input_ids.to(self.model.device)
+            attention_mask = batch.attention_mask.to(self.model.device)
+            with self._torch.no_grad():
+                logits = self.model(full_ids, attention_mask=attention_mask).logits
+            log_probs = logits.log_softmax(-1)
+            for row in range(full_ids.shape[0]):
+                cont_ids = full_ids[row, p_len:]
+                cont_mask = attention_mask[row, p_len:].bool()
+                if cont_ids.numel() == 0:
+                    scores.append(0.0)
+                    continue
+                positions = log_probs[row, p_len - 1 : p_len - 1 + cont_ids.numel(), :]
+                token_scores = positions.gather(-1, cont_ids.unsqueeze(-1)).squeeze(-1)
+                scores.append(float(token_scores[cont_mask].sum().item()))
+        return scores
+
     def score_continuation(self, prompt: str, continuation: str) -> float:
         """返回 continuation 在 prompt 条件下的对数概率之和（prompt + continuation 直接拼接）。"""
-        prompt_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.model.device)
-        full_ids = self.tokenizer(prompt + continuation, return_tensors="pt").input_ids.to(self.model.device)
-        p_len = prompt_ids.shape[-1]
-        with self._torch.no_grad():
-            logits = self.model(full_ids).logits[0]
-        log_probs = logits.log_softmax(-1)
-        cont_ids = full_ids[0, p_len:]
-        total = 0.0
-        for i in range(cont_ids.shape[0]):
-            total += log_probs[p_len - 1 + i, cont_ids[i]].item()
-        return total
+        return self.score_continuations(prompt, [continuation])[0]
 
     def score_answer(self, prompt: str, answer: str) -> float:
         """官方 TruthfulQA MC 评分：返回 '\nA: ' + answer 在 prompt 条件下的对数概率之和。"""
